@@ -12,8 +12,9 @@ class Policy(torch.nn.Module):
         # Create layers etc
         self.state_space = state_space
         self.action_space = action_space
-        self.fc1 = torch.nn.Linear(state_space, 50)
-        self.fc2 = torch.nn.Linear(50, action_space)
+        self.fc1 = torch.nn.Linear(state_space, 20)
+        self.fc2 = torch.nn.Linear(20, action_space)
+        #self.sig = torch.nn.Sigmoid()
         #self.fc3 = torch.nn.Linear(50, 1)
         
         # Initialize neural network weights
@@ -26,12 +27,15 @@ class Policy(torch.nn.Module):
                 torch.nn.init.zeros_(m.bias)
 
     def forward(self, x):
+        #x = x.type(torch.ByteTensor)
+        #x = x.byte()
+        print("for0")
         x = self.fc1(x)
+        print("for1")
         x = F.relu(x)
         x = self.fc2(x)
-        #mean = self.fc2(x)
-        #var = self.fc3(x)
-        #return Normal(torch.Tensor(mean),torch.Tensor(var))
+        print("for2")
+        print(x.shape)
         return F.softmax(x, dim=-1)
 	
 	
@@ -55,13 +59,19 @@ class Agent(object):
         return self.name
 	
     def get_action(self, ob=None, evaluation=False):
-        x = torch.from_numpy(np.asarray(ob)).float().to(self.train_device)
+        print("act0")
+        x = torch.from_numpy(ob.copy()).float().to(self.train_device)
+        #y = x.type(torch.ByteTensor)
+        #print(x.data)
+        print("act1")
         aprob = self.policy.forward(x)
+        print("act2")
         #action = aprob.rsample()
         if evaluation:
             action = torch.argmax(aprob).item()
         else:
             action = softmax_sample(aprob)
+        print("act3")
         return action, aprob
 	
     def update_policy(self):
