@@ -68,7 +68,7 @@ def stack_frame(stacked_frames, new_frame, reset=False):
     state[:,0] = stacked_frames[0]
     state[:,1] = stacked_frames[1]
     state[:,2] = stacked_frames[2]
-    state[:,2] = stacked_frames[2]
+    state[:,3] = stacked_frames[3]
     return state, stacked_frames
 
 '''
