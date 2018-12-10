@@ -101,6 +101,9 @@ class Player():
             self.color = (255, 0, 0)
         self.y = 136
         self.rect = pygame.Rect(self.x, self.y - self.h / 2, self.w, self.h)
+        
+    def reset_score(self):
+        self.score = 0
 
 
 class Pong():

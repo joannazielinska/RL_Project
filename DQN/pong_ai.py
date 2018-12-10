@@ -12,16 +12,17 @@ import torch
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--headless", action="store_true", help="Run in headless mode")
+parser.add_argument("--test", "-t", type=str, default=None, help="Model to be tested")
 args = parser.parse_args()
 
 '''
 Parameters
 '''
-episodes = 10
-epsilon = 0.5
+episodes = 10000
+epsilon = 0.6
 gamma = 0.9
 decay = 0.00001
-memory_size = 100#10000
+memory_size = 10000
 batch_size = 64
 update_step = 1000
 
@@ -88,98 +89,142 @@ observation_space_dim = 4
 #Classes
 policy = Policy(observation_space_dim, action_space_dim)
 player = Agent(env, policy, player_id)
-target_dqn = Policy(observation_space_dim, action_space_dim)
-target_dqn.load_state_dict(policy.state_dict())
 
 env.set_names(player.get_name(), opponent.get_name())
 
-#Stacked preprocessed frames
-stacked_frames = deque(np.zeros((200,210)), maxlen=4)
+def train(episodes, player, opponent):
+    
+    target_dqn = Policy(observation_space_dim, action_space_dim)
+    target_dqn.load_state_dict(policy.state_dict())
+    #Stacked preprocessed frames
+    stacked_frames = deque(np.zeros((200,210)), maxlen=4)
 
-#Updates
-update_counter = 0
+    #Updates
+    update_counter = 0
 
-#Memory Initialisation
-# take random actions to fill the memory
-memory = Memory(memory_size, batch_size)
-for i in range(memory_size):
-    if (i==0):
+    #Memory Initialisation
+    # take random actions to fill the memory
+    memory = Memory(memory_size, batch_size)
+    for i in range(memory_size):
+        if (i==0):
+            obs = env.reset()
+            state, stacked_frames = stack_frame(stacked_frames, obs[0], True)
+        action1 = random.randint(0,3)
+        action2 = random.randint(0,3)
+        next_obs, rewards, done, info = env.step((action1,action2))
+        next_state, stacked_frames = stack_frame(stacked_frames, next_obs[0])
+        memory.store((state, action1, rewards[0], next_state, done))
+        state = next_state
+
+    player.reset_score()
+    opponent.reset_score()
+
+    '''
+    Training
+    '''
+
+    for i in range(0,episodes):
+        done = False
         obs = env.reset()
         state, stacked_frames = stack_frame(stacked_frames, obs[0], True)
-    action1 = random.randint(0,3)
-    action2 = random.randint(0,3)
-    next_obs, rewards, done, info = env.step((action1,action2))
-    next_state, stacked_frames = stack_frame(stacked_frames, next_obs[0])
-    memory.store((state, action1, rewards[0], next_state, done))
-    state = next_state
+        timesteps = 0
+        reward_sum = 0
 
-'''
-Training
-'''
+        while not done:
+            action1 = player.get_action(state, epsilon)
+            action2 = opponent.get_action()
 
-for i in range(0,episodes):
-    done = False
-    obs = env.reset()
-    state, stacked_frames = stack_frame(stacked_frames, obs[0], True)
-    timesteps = 0
-    reward_sum = 0
+            next_obs, rewards, done, info = env.step((action1, action2))
+            next_state, stacked_frames = stack_frame(stacked_frames, next_obs[0])
+
+            memory.store((state, action1, rewards[0], next_state, done))
+            reward_sum += rewards[0]
+
+            obs = next_obs
+            state = next_state
+
+            env.render()
+
+            #Updating policy
+                #Loading from memory
+            samples = memory.sample()
+            batch_states = np.asarray([x[0] for x in samples])
+            batch_actions = np.asarray([x[1] for x in samples])
+            batch_rewards = np.asarray([x[2] for x in samples])
+            batch_next_states = np.asarray([x[3] for x in samples])
+            batch_done = np.asarray([x[4] for x in samples])
+
+                #Target network
+            batch = torch.from_numpy(batch_next_states.squeeze()).float().to(player.train_device)
+            batch_t_q_values = target_dqn.forward(batch)
+
+                #Q Learning
+            batch_t_q_max,_ = batch_t_q_values.max(dim=1)
+            y = torch.empty(batch_size, 1)
+            batch_rewards = torch.from_numpy(batch_rewards).float().to(player.train_device)
+
+            for j in range(batch_size):
+                #.any() ?
+                if batch_done[j].any():
+                    y[j] = batch_rewards[j]
+                else:
+                    y[j] = batch_rewards[j] + batch_t_q_max[j].mul(gamma)
+            y.detach()
+
+                #Gradient_descent
+            batch_q_values = policy.forward(torch.from_numpy(batch_states.squeeze()).float().to(player.train_device))
+            loss = torch.mean(y.sub(batch_q_values)**2)
+            loss.backward()
+
+            player.update_policy()
+
+            update_counter += 1
+            if (update_counter % update_step == 0):
+                target_dqn.load_state_dict(policy.state_dict())
+            timesteps += 1
+
+        epsilon = epsilon*decay
+        print("Episode {} finished. Total reward: {:.3g} ({} timesteps)"
+                  .format(i, reward_sum, timesteps))
     
-    while not done:
-        action1 = player.get_action(state, epsilon)
-        action2 = opponent.get_action()
+def test(episodes, player, opponent):
+    for i in range(0,episodes):
+        done = False
+        obs = env.reset()
+        state, stacked_frames = stack_frame(stacked_frames, obs[0], True)
+        timesteps = 0
+        reward_sum = 0
         
-        next_obs, rewards, done, info = env.step((action1, action2))
-        next_state, stacked_frames = stack_frame(stacked_frames, next_obs[0])
-        
-        memory.store((state, action1, rewards[0], next_state, done))
-        reward_sum += rewards[0]
+        while not done:
+            action1 = player.get_action(state, epsilon)
+            action2 = opponent.get_action()
 
-        obs = next_obs
-        state = next_state
-        
-        env.render()
-        
-        #Updating policy
-            #Loading from memory
-        samples = memory.sample()
-        batch_states = np.asarray([x[0] for x in samples])
-        batch_actions = np.asarray([x[1] for x in samples])
-        batch_rewards = np.asarray([x[2] for x in samples])
-        batch_next_states = np.asarray([x[3] for x in samples])
-        batch_done = np.asarray([x[4] for x in samples])
-            
-            #Target network
-        batch = torch.from_numpy(batch_next_states.squeeze()).float().to(player.train_device)
-        batch_t_q_values = target_dqn.forward(batch)
-        
-            #Q Learning
-        batch_t_q_max,_ = batch_t_q_values.max(dim=1)
-        y = torch.empty(batch_size, 1)
-        batch_rewards = torch.from_numpy(batch_rewards).float().to(player.train_device)
-        
-        for j in range(batch_size):
-            #.any() ?
-            if batch_done[j].any():
-                y[j] = batch_rewards[j]
-            else:
-                y[j] = batch_rewards[j] + batch_t_q_max[j].mul(gamma)
-        y.detach()
-                
-            #Gradient_descent
-        batch_q_values = policy.forward(torch.from_numpy(batch_states.squeeze()).float().to(player.train_device))
-        loss = torch.mean(y.sub(batch_q_values)**2)
-        loss.backward()
-        
-        player.update_policy()
-        
-        update_counter += 1
-        if (update_counter % update_step == 0):
-            target_dqn.load_state_dict(policy.state_dict())
-        timesteps += 1
-        
-    epsilon = epsilon*decay
-    print("Episode {} finished. Total reward: {:.3g} ({} timesteps)"
-              .format(i, reward_sum, timesteps))
+            next_obs, rewards, done, info = env.step((action1, action2))
+            next_state, stacked_frames = stack_frame(stacked_frames, next_obs[0])
+
+            reward_sum += rewards[0]
+
+            obs = next_obs
+            state = next_state
+
+    env.render()
+    
+# If no model was passed, train a policy from scratch.
+# Otherwise load the policy from the file and go directly to testing.
+if args.test is None:
+    try:
+        train(episodes, player, opponent)
+    # Handle Ctrl+C - save model and go to tests
+    except KeyboardInterrupt:
+        print("Interrupted!")
+    model_file = "%dqn.mdl" % args.env
+    torch.save(policy.state_dict(), model_file)
+    print("Model saved to", model_file)
+else:
+    state_dict = torch.load(args.test)
+    policy.load_state_dict(state_dict)
+    print("Testing...")
+    test(100, player, opponent)
     
     
     
